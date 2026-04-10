@@ -6,7 +6,6 @@
 
 """
 Grader for evaluating counsellor responses in the Student Counsellor Environment.
-
 Implements deterministic reward calculation based on empathy, encouragement,
 practical advice, and safety checks.
 """
@@ -17,7 +16,6 @@ from typing import Tuple
 class CounsellorGrader:
     """
     Grades counsellor responses based on quality criteria.
-
     Implements deterministic reward calculation from 0.0 to 1.0 based on:
     - Empathy: Understanding and acknowledgment of student feelings
     - Encouragement: Positive reinforcement and motivation
@@ -90,10 +88,8 @@ class CounsellorGrader:
     def _normalize_text(text: str) -> str:
         """
         Normalize text for comparison.
-
         Args:
             text: Input text
-
         Returns:
             Lowercase, whitespace-normalized text
         """
@@ -103,11 +99,9 @@ class CounsellorGrader:
     def _count_keyword_matches(text: str, keywords: list[str]) -> int:
         """
         Count how many keywords appear in text.
-
         Args:
             text: Text to search
             keywords: List of keywords to look for
-
         Returns:
             Count of keyword matches (each keyword counted once maximum)
         """
@@ -122,13 +116,10 @@ class CounsellorGrader:
     def _check_bad_keywords(text: str) -> int:
         """
         Check for bad keywords in text, with context awareness.
-
         For example, "don't give up" should not count as a bad keyword
         even though "give up" is in the bad keywords list.
-
         Args:
             text: Text to search
-
         Returns:
             Count of bad keyword matches
         """
@@ -165,10 +156,8 @@ class CounsellorGrader:
     def grade(self, response: str) -> Tuple[float, dict]:
         """
         Grade a counsellor response.
-
         Args:
             response: The counsellor's response to grade
-
         Returns:
             Tuple of (reward_score, details_dict)
             - reward_score: Float between 0.0 and 1.0
@@ -205,11 +194,11 @@ class CounsellorGrader:
         # Combine scores (weighted average)
         # Weight: empathy 35%, encouragement 35%, practical advice 30%
         total_reward = (
-            empathy_score * 0.35 + encouragement_score * 0.35 + advice_score * 0.35
+            empathy_score * 0.30 + encouragement_score * 0.30 + advice_score * 0.30
         )
 
         # Clamp between 0 and 1
-        total_reward = max(0.0, min(1.0, total_reward))
+        total_reward = max(0.01, min(0.99, total_reward))
 
         details = {
             "empathy": empathy_score,
@@ -232,10 +221,8 @@ grader = CounsellorGrader()
 def grade_response(response: str) -> Tuple[float, dict]:
     """
     Grade a counsellor response using the global grader.
-
     Args:
         response: The counsellor's response to grade
-
     Returns:
         Tuple of (reward_score, details_dict)
     """
