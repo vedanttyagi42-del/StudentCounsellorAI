@@ -72,7 +72,7 @@ class StudentCounsellorEnv(Environment):
             task_description=self._current_task.description,
             expected_behavior=self._current_task.expected_behavior,
             counsellor_response="",
-            reward=0.0,
+            reward=None,
             done=False,
             metadata={"step": 0, "episode_id": self._state.episode_id},
         )
