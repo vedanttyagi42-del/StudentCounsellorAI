@@ -166,12 +166,12 @@ class CounsellorGrader:
         # Check for bad keywords - immediate disqualification
         bad_keyword_count = self._check_bad_keywords(response)
         if bad_keyword_count > 0:
-            return 0.0, {
+            return 0.01, {
                 "empathy": 0.0,
                 "encouragement": 0.0,
                 "practical_advice": 0.0,
                 "bad_keywords_found": bad_keyword_count,
-                "total_reward": 0.0,
+                "total_reward": 0.01,
             }
 
         # Count positive keywords
