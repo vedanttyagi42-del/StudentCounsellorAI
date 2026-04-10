@@ -48,4 +48,5 @@ class StudentCounsellorObservation(Observation):
     )
 
     # Reward information
-    reward: float = Field(default=0.0, description="Reward score from 0.0 to 1.0")
+    reward: Optional[float] = None
+
