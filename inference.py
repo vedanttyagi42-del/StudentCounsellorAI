@@ -147,17 +147,12 @@ def run_inference(
     task_difficulty: Literal["easy", "medium", "hard"] = "easy",
 ) -> None:
     """
-    Run inference for a single task.
-
+    Run inference for all tasks (easy, medium, hard).
     Args:
-        task_difficulty: Difficulty level of the task (easy, medium, or hard)
+        task_difficulty: Ignored, runs all difficulties to satisfy evaluator requirement of 3 tasks.
     """
     print("[START]")
     print("Initializing Student Counsellor Environment...")
-    print(f"Task difficulty: {task_difficulty}")
-
-    # Initialize environment
-    env = StudentCounsellorEnv()
 
     # Get OpenAI client
     try:
@@ -169,56 +164,61 @@ def run_inference(
         print("[END]")
         return
 
-    # Reset environment
-    print("\n[STEP] Resetting environment...")
-    obs = env.reset(task_difficulty=task_difficulty)
+    # Run all 3 tasks so evaluator sees at least 3 graded results
+    for difficulty in ["easy", "medium", "hard"]:
+        print(f"\n{'='*50}")
+        print(f"Task difficulty: {difficulty}")
 
-    print(f"Task ID: {obs.task_id}")
-    print(f"Task Difficulty: {obs.task_difficulty}")
-    print(f"Task Description: {obs.task_description}")
-    print(f"Student Message: {obs.student_message}")
-    print(f"Expected Behavior: {obs.expected_behavior}")
+        # Initialize a fresh environment per task
+        env = StudentCounsellorEnv()
 
-    # Generate response
-    print("\n[STEP] Generating counsellor response...")
-    try:
-        counsellor_response = generate_counsellor_response(
-            client, obs.student_message, model_name
-        )
-        print(f"Counsellor Response: {counsellor_response}")
-    except Exception as e:
-        print(f"Error generating response: {e}")
-        print("[END]")
-        return
+        # Reset environment
+        print("\n[STEP] Resetting environment...")
+        obs = env.reset(task_difficulty=difficulty)
+        print(f"Task ID: {obs.task_id}")
+        print(f"Task Difficulty: {obs.task_difficulty}")
+        print(f"Task Description: {obs.task_description}")
+        print(f"Student Message: {obs.student_message}")
+        print(f"Expected Behavior: {obs.expected_behavior}")
 
-    # Step environment
-    print("\n[STEP] Evaluating response...")
-    action = StudentCounsellorAction(message=counsellor_response)
-    result_obs = env.step(action)
+        # Generate response
+        print("\n[STEP] Generating counsellor response...")
+        try:
+            counsellor_response = generate_counsellor_response(
+                client, obs.student_message, model_name
+            )
+            print(f"Counsellor Response: {counsellor_response}")
+        except Exception as e:
+            print(f"Error generating response: {e}")
+            continue
 
-    print(f"Reward: {result_obs.reward:.4f}")
-    print(f"Done: {result_obs.done}")
+        # Step environment
+        print("\n[STEP] Evaluating response...")
+        action = StudentCounsellorAction(message=counsellor_response)
+        result_obs = env.step(action)
+        print(f"Reward: {result_obs.reward:.4f}")
+        print(f"Done: {result_obs.done}")
 
-    if result_obs.metadata and "reward_details" in result_obs.metadata:
-        details = result_obs.metadata["reward_details"]
-        empathy = details.get("empathy", 0.0)
-        encouragement = details.get("encouragement", 0.0)
-        practical_advice = details.get("practical_advice", 0.0)
-        empathy_score = empathy * 0.35
-        encouragement_score = encouragement * 0.35
-        practical_advice_score = practical_advice * 0.35
-        print("\nReward Breakdown:")
-        print(f"  Empathy: {empathy_score:.4f}")
-        print(f"  Encouragement: {encouragement_score:.4f}")
-        print(f"  Practical Advice: {practical_advice_score:.4f}")
-    # Get final state
-    print("\n[STEP] Final state:")
-    state = env.state
-    print(f"Episode ID: {state.episode_id}")
-    print(f"Step Count: {state.step_count}")
+        if result_obs.metadata and "reward_details" in result_obs.metadata:
+            details = result_obs.metadata["reward_details"]
+            empathy = details.get("empathy", 0.0)
+            encouragement = details.get("encouragement", 0.0)
+            practical_advice = details.get("practical_advice", 0.0)
+            empathy_score = empathy * 0.30
+            encouragement_score = encouragement * 0.30
+            practical_advice_score = practical_advice * 0.30
+            print("\nReward Breakdown:")
+            print(f"  Empathy: {empathy_score:.4f}")
+            print(f"  Encouragement: {encouragement_score:.4f}")
+            print(f"  Practical Advice: {practical_advice_score:.4f}")
+
+        # Get final state
+        print("\n[STEP] Final state:")
+        state = env.state
+        print(f"Episode ID: {state.episode_id}")
+        print(f"Step Count: {state.step_count}")
 
     print("\n[END]")
-
 
 def run_cli_mode() -> None:
     """
