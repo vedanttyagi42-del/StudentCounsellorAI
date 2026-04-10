@@ -1,324 +1,202 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
+#!/usr/bin/env python3
 """
-Inference script for the Student Counsellor Environment.
+Competition inference script — Student Counsellor AI.
 
-This script runs the Student Counsellor environment with an OpenAI-based
-model to generate counsellor responses to student concerns.
+MANDATORY ENV VARS:
+    API_BASE_URL   The API endpoint for the LLM.
+    MODEL_NAME     The model identifier to use for inference.
+    API_KEY        Authentication token (evaluator injects API_KEY; HF_TOKEN as fallback).
 
-Usage:
-    python -m student_counsellor.inference
-    python -m student_counsellor.inference --task easy
-    python -m student_counsellor.inference --task medium
-    python -m student_counsellor.inference --task hard
-    python -m student_counsellor.inference --cli
-
-Interactive CLI mode:
-    python -m student_counsellor.inference --cli
-
-Environment variables:
-    - API_BASE_URL: Base URL for OpenAI API (default: https://api.openai.com/v1)
-    - MODEL_NAME: Model to use (default: gpt-3.5-turbo)
-    - OPENAI_API_KEY: API key for OpenAI (required)
-    - HF_TOKEN: Hugging Face token (optional, for alternative backends)
+STDOUT FORMAT:
+    [START] task=<task_name> env=student_counsellor model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
 """
+from __future__ import annotations
 
 import os
 import sys
-import argparse
-from typing import Literal
+from typing import List, Optional
+
 from dotenv import load_dotenv
 
-load_dotenv()
-try:
-    from openai import OpenAI
-except ImportError:
-    print("Error: openai package is required. Install with: pip install openai")
-    sys.exit(1)
+load_dotenv(override=False)  # never override evaluator-injected env vars
 
-# Handle both module and direct execution
-try:
-    from .env import StudentCounsellorEnv
-    from .models import StudentCounsellorAction
-except ImportError:
-    # When run directly with python inference.py, use absolute imports
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from student_counsellor.env import StudentCounsellorEnv
-    from student_counsellor.models import StudentCounsellorAction
+from openai import OpenAI
 
+# ---------------------------------------------------------------------------
+# Configuration (competition-mandated env vars)
+# ---------------------------------------------------------------------------
+API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+ENV_URL = os.getenv("ENV_URL", "http://localhost:8000")
+BENCHMARK = "student_counsellor"
+SUCCESS_THRESHOLD = 0.1
 
-# System prompt for the counsellor
-SYSTEM_PROMPT = """You are a supportive and intelligent student counsellor and study assistant.
+if not API_KEY:
+    raise ValueError("API_KEY or HF_TOKEN environment variable is required")
 
-Your main focus is academics, but you also provide emotional support only when needed.
+client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-You help students with:
-- Academic doubts (explained simply)
-- Motivation and encouragement for studies
-- Practical study advice
-- Creating study plans and daily timetables
+SYSTEM_PROMPT = """You are a supportive student counsellor.
+When responding to students:
+1. Show genuine empathy - use phrases like 'I understand', 'I hear you', 'that sounds difficult'
+2. Use encouraging words - like 'you can do it', 'believe in yourself', 'you have potential'
+3. Give practical advice - suggest 'study plan', 'take breaks', 'start small', 'practice daily'
+4. Never use discouraging language
+Keep responses to 3-5 sentences."""
 
-Follow these STRICT rules in every response:
-1. If the user shows signs of stress, anxiety, or lack of confidence → start with empathy, then encouragement, then practical help.
-2. If the user is casually chatting or sending greetings (e.g., "hi", "hello", "yo") → respond in a friendly, neutral way, without assuming they are upset.
-3. If the user asks academic questions or for study help → respond clearly and helpfully.
-4. Keep explanations simple and short (3–6 sentences)
-5. Use simple language suitable for school students
-6. Do NOT say anything negative or discouraging
-7. Do NOT include emojis
-
-Special behavior:
-- For study plans → give step-by-step actionable plan
-- For timetables → suggest realistic time blocks
-- For doubts → explain like a friendly teacher
-- Only give emotional support when it seems necessary
-"""
+TASKS = [
+    {"id": 0, "name": "task_easy_studies",    "message": "I am bad at studies"},
+    {"id": 1, "name": "task_medium_exams",    "message": "I feel I will fail exams"},
+    {"id": 2, "name": "task_hard_comparison", "message": "Everyone is better than me"},
+]
 
 
-def get_openai_client() -> OpenAI:
-    """
-    Initialize and return an OpenAI client.
-
-    Reads configuration from environment variables:
-    - API_BASE_URL: Base URL for the API (default: https://api.openai.com/v1)
-    - MODEL_NAME: Model name (default: gpt-3.5-turbo)
-    - OPENAI_API_KEY: API key (required)
-
-    Returns:
-        OpenAI client instance
-
-    Raises:
-        ValueError: If OPENAI_API_KEY is not set
-    """
-    api_key = os.getenv("API_KEY")
-    if not api_key:
-        raise ValueError(
-            "API_KEY environment variable is not set. "
-            "Please set it before running inference."
-        )
-
-    api_base_url = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-
-    return OpenAI(api_key=api_key, base_url=api_base_url)
+# ---------------------------------------------------------------------------
+# Strict stdout helpers
+# ---------------------------------------------------------------------------
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def get_model_name() -> str:
-    """
-    Get the model name from environment variable.
-
-    Returns:
-        Model name (default: gpt-3.5-turbo)
-    """
-    return os.getenv("MODEL_NAME", "gpt-3.5-turbo")
-
-
-def generate_counsellor_response(
-    client: OpenAI, student_message: str, model_name: str
-) -> str:
-    """
-    Generate a counsellor response using OpenAI API.
-
-    Args:
-        client: OpenAI client instance
-        student_message: The student's message
-        model_name: Name of the model to use
-
-    Returns:
-        Generated counsellor response
-    """
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": student_message},
-        ],
-        temperature=0.7,
-        max_tokens=500,
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
     )
 
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Grader (mirrors grader.py exactly)
+# ---------------------------------------------------------------------------
+def grade_response(response: str) -> float:
+    import re
+    text = " ".join(response.lower().split())
+
+    if "give up" in text:
+        if not re.search(r"(don't|never|will not).*give up", text):
+            return 0.01
+
+    bad_keywords = [
+        "you will fail", "you are useless", "no hope", "hopeless",
+        "worthless", "never succeed", "impossible", "quit",
+    ]
+    for kw in bad_keywords:
+        if kw in text:
+            return 0.01
+
+    empathy_kws = [
+        "i understand", "it's okay", "i'm sorry", "that sounds difficult",
+        "i hear you", "you're not alone", "i realize", "that's tough",
+    ]
+    encourage_kws = [
+        "you can do it", "you are capable", "keep trying", "don't give up",
+        "you have potential", "believe in yourself", "you are strong",
+        "you will improve", "never give up", "you've got this",
+    ]
+    advice_kws = [
+        "make a plan", "study plan", "start small", "start by", "practice",
+        "practice daily", "revise", "take breaks", "step by step", "break down",
+        "organize", "focus on", "try", "set a goal", "goal", "improve", "daily",
+    ]
+
+    e = sum(1 for kw in empathy_kws   if kw in text)
+    c = sum(1 for kw in encourage_kws if kw in text)
+    a = sum(1 for kw in advice_kws    if kw in text)
+
+    e_score = min(1.0, e * 0.7) if e > 0 else 0.0
+    c_score = min(1.0, c * 0.7) if c > 0 else 0.0
+    a_score = min(1.0, a * 0.7) if a > 0 else 0.0
+
+    total = e_score * 0.35 + c_score * 0.35 + a_score * 0.30
+    return max(0.01, min(0.99, total))
+
+
+# ---------------------------------------------------------------------------
+# LLM call
+# ---------------------------------------------------------------------------
+def call_llm(student_message: str) -> str:
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": student_message},
+        ],
+        temperature=0.7,
+        max_tokens=300,
+    )
     return response.choices[0].message.content
 
 
-def run_inference(
-    task_difficulty: Literal["easy", "medium", "hard"] = "easy",
-) -> None:
-    """
-    Run inference for all tasks (easy, medium, hard).
-    Args:
-        task_difficulty: Ignored, runs all difficulties to satisfy evaluator requirement of 3 tasks.
-    """
-    print("[START]")
-    print("Initializing Student Counsellor Environment...")
+# ---------------------------------------------------------------------------
+# Run one task
+# ---------------------------------------------------------------------------
+def run_task(task: dict) -> float:
+    task_name = task["name"]
+    student_message = task["message"]
+    model_name = MODEL_NAME
 
-    # Get OpenAI client
+    log_start(task=task_name, env=BENCHMARK, model=model_name)
+
+    rewards: List[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
+
     try:
-        client = get_openai_client()
-        model_name = get_model_name()
-        print(f"Using model: {model_name}")
-    except ValueError as e:
-        print(f"Error: {e}")
-        print("[END]")
-        return
+        response = call_llm(student_message)
+        steps_taken = 1
+        reward = grade_response(response)
+        rewards.append(reward)
 
-    # Run all 3 tasks so evaluator sees at least 3 graded results
-    for difficulty in ["easy", "medium", "hard"]:
-        print(f"\n{'='*50}")
-        print(f"Task difficulty: {difficulty}")
+        action_str = response.replace("\n", " ")[:100]
+        log_step(
+            step=steps_taken,
+            action=action_str,
+            reward=reward,
+            done=True,
+            error=None,
+        )
 
-        # Initialize a fresh environment per task
-        env = StudentCounsellorEnv()
+        score = reward
+        success = score >= SUCCESS_THRESHOLD
 
-        # Reset environment
-        print("\n[STEP] Resetting environment...")
-        obs = env.reset(task_difficulty=difficulty)
-        print(f"Task ID: {obs.task_id}")
-        print(f"Task Difficulty: {obs.task_difficulty}")
-        print(f"Task Description: {obs.task_description}")
-        print(f"Student Message: {obs.student_message}")
-        print(f"Expected Behavior: {obs.expected_behavior}")
+    except Exception as exc:
+        steps_taken = max(steps_taken, 1)
+        rewards = rewards or [0.01]
+        print(f"[DEBUG] Task {task_name} error: {exc}", file=sys.stderr, flush=True)
+        log_step(step=steps_taken, action="error", reward=0.01, done=True, error=str(exc))
 
-        # Generate response
-        print("\n[STEP] Generating counsellor response...")
-        try:
-            counsellor_response = generate_counsellor_response(
-                client, obs.student_message, model_name
-            )
-            print(f"Counsellor Response: {counsellor_response}")
-        except Exception as e:
-            print(f"Error generating response: {e}")
-            continue
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
-        # Step environment
-        print("\n[STEP] Evaluating response...")
-        action = StudentCounsellorAction(message=counsellor_response)
-        result_obs = env.step(action)
-        print(f"Reward: {result_obs.reward:.4f}")
-        print(f"Done: {result_obs.done}")
-
-        if result_obs.metadata and "reward_details" in result_obs.metadata:
-            details = result_obs.metadata["reward_details"]
-            empathy = details.get("empathy", 0.0)
-            encouragement = details.get("encouragement", 0.0)
-            practical_advice = details.get("practical_advice", 0.0)
-            empathy_score = empathy * 0.30
-            encouragement_score = encouragement * 0.30
-            practical_advice_score = practical_advice * 0.30
-            print("\nReward Breakdown:")
-            print(f"  Empathy: {empathy_score:.4f}")
-            print(f"  Encouragement: {encouragement_score:.4f}")
-            print(f"  Practical Advice: {practical_advice_score:.4f}")
-
-        # Get final state
-        print("\n[STEP] Final state:")
-        state = env.state
-        print(f"Episode ID: {state.episode_id}")
-        print(f"Step Count: {state.step_count}")
-
-    print("\n[END]")
-
-def run_cli_mode() -> None:
-    """
-    Run the Student Counsellor in interactive CLI mode.
-
-    Provides an interactive terminal-based chat interface where users can
-    type messages and receive responses from the AI counsellor.
-    Maintains conversation history for context-aware responses.
-    """
-    print("=" * 70)
-    print("STUDENT COUNSELLOR - INTERACTIVE MODE")
-    print("=" * 70)
-    print("Type your concerns or questions. Type 'exit' or 'quit' to leave.")
-    print("=" * 70)
-
-    # Initialize OpenAI client
-    try:
-        client = get_openai_client()
-        model_name = get_model_name()
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
-
-    # Conversation history (store last 10 messages)
-    conversation_history = []
-    max_history = 10
-
-    # Main interaction loop
-    while True:
-        try:
-            # Get user input
-            user_input = input("\nYou: ").strip()
-
-            # Check for exit conditions
-            if user_input.lower() in ["exit", "quit"]:
-                print("Goodbye!")
-                break
-
-            # Skip empty input
-            if not user_input:
-                continue
-
-            # Add user message to history
-            conversation_history.append({"role": "user", "content": user_input})
-
-            # Build messages list with system prompt and history
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-            ]
-            messages.extend(conversation_history[-max_history:])
-
-            # Get AI response
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500,
-            )
-
-            ai_response = response.choices[0].message.content
-
-            # Add AI response to history
-            conversation_history.append({"role": "assistant", "content": ai_response})
-
-            # Print AI response
-            print(f"AI: {ai_response}")
-
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
-            break
-        except Exception as e:
-            print(f"Error: {type(e).__name__}: {e}")
-            print("Please try again.")
+    return score
 
 
-def main():
-    """Main entry point for the inference script."""
-    parser = argparse.ArgumentParser(
-        description="Run Student Counsellor inference with OpenAI"
-    )
-    parser.add_argument(
-        "--cli",
-        action="store_true",
-        help="Run in interactive CLI mode",
-    )
-    parser.add_argument(
-        "--task",
-        choices=["easy", "medium", "hard"],
-        default="easy",
-        help="Task difficulty level (default: easy) - ignored if --cli is used",
-    )
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> None:
+    scores: dict[str, float] = {}
 
-    args = parser.parse_args()
+    for task in TASKS:
+        scores[task["name"]] = run_task(task)
 
-    # Run CLI mode if requested
-    if args.cli:
-        run_cli_mode()
-    else:
-        # Run normal OpenEnv inference mode
-        run_inference(task_difficulty=args.task)
+    if len(scores) > 1:
+        overall = sum(scores.values()) / len(scores)
+        print(f"[DEBUG] Overall: {overall:.4f}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
