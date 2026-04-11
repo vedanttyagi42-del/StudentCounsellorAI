@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
 Competition inference script — Student Counsellor AI.
-
 MANDATORY ENV VARS:
     API_BASE_URL   The API endpoint for the LLM.
     MODEL_NAME     The model identifier to use for inference.
     API_KEY        Authentication token (evaluator injects API_KEY; HF_TOKEN as fallback).
-
 STDOUT FORMAT:
     [START] task=<task_name> env=student_counsellor model=<model_name>
     [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
@@ -152,7 +150,7 @@ def run_task(task: dict) -> float:
 
     rewards: List[float] = []
     steps_taken = 0
-    score = 0.0
+    score = 0.01
     success = False
 
     try:
@@ -175,7 +173,12 @@ def run_task(task: dict) -> float:
 
     except Exception as exc:
         steps_taken = max(steps_taken, 1)
-        rewards = rewards or [0.01]
+        finally:
+            if not rewards:
+                rewards = [0.01]
+            if score == 0.0:
+                score = 0.01
+            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
         print(f"[DEBUG] Task {task_name} error: {exc}", file=sys.stderr, flush=True)
         log_step(step=steps_taken, action="error", reward=0.01, done=True, error=str(exc))
 
