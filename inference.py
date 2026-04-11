@@ -173,20 +173,17 @@ def run_task(task: dict) -> float:
 
     except Exception as exc:
         steps_taken = max(steps_taken, 1)
-        finally:
-            if not rewards:
-                rewards = [0.01]
-            if score == 0.0:
-                score = 0.01
-            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
         print(f"[DEBUG] Task {task_name} error: {exc}", file=sys.stderr, flush=True)
         log_step(step=steps_taken, action="error", reward=0.01, done=True, error=str(exc))
 
     finally:
+        if not rewards:
+            rewards = [0.01]
+        if score <= 0.0:
+            score = 0.01
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     return score
-
 
 # ---------------------------------------------------------------------------
 # Main
